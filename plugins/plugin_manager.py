@@ -271,6 +271,7 @@ class PluginManager:
             "HELLO",
             "GODCMD",
             "ROLE",
+            "FAQ",
             "TOOL",
             "BDUNIT",
             "BANWORDS",

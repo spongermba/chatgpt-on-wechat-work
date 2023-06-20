@@ -13,6 +13,13 @@ langid # language detect
 #install plugin
 dulwich
 
+#faq plugin
+matplotlib
+pandas
+plotly
+scipy
+scikit-learn
+
 # wechaty
 wechaty>=0.10.7
 wechaty_puppet>=0.4.23
