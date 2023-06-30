@@ -1,5 +1,6 @@
 import os
 import ast
+import helper
 import pandas as pd
 import numpy as np
 import openai
@@ -95,20 +96,35 @@ def generate_embedding_from_csv_file(file):
    curdir = os.path.dirname(file)
    df.to_csv(os.path.join(curdir, "qa_embedding.csv"), index=False)
 
+def generate_relevant_queries(question:str)->list:
+    queries_input = f"""
+    生成一系列跟此问题相关的问题。这些问题应该是一些你认为用户可能会从不同角度提出的同一个问题。
+    在问题中使用关键词的变体，尽可能的概括，包括你能想到的尽可能多的提问。
+    比如, 包含的查询就想这样 ['keyword_1 keyword_2', 'keyword_1', 'keyword_2']
+
+    User question: {question}
+
+    Format: {{"queries": ["query_1", "query_2", "query_3"]}}
+    """
+    queries = helper.json_gpt(queries_input)
+    return queries["queries"]
+
 #write termal command to test
 if __name__ == "__main__":
     print("test")
-    openai.api_key = "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"
+    openai.api_key = "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"
     curdir = os.path.dirname(__file__)
     #给出菜单选项，选择1，2，3。1是生成qa_embedding.csv文件，2是从qa_embedding.csv文件中读取数据，3是退出
     #如果选择1，则调用generate_embedding_from_csv_file函数生成qa_embedding.csv文件
     #如果选择2，则调用load_faq_from_embedding_file函数从qa_embedding.csv文件中读取数据
-    #如果选择3，则退出
+    #如果选择3，则调用generate_relevant_queries函数生成相关的查询，需要输入一个问题
+    #如果选择4，则退出
     #生成代码如下   
     while True:
         print("1. generate embedding file")
         print("2. get answer from embedding file")
-        print("3. exit")
+        print("3. generate relevant queries")
+        print("4. exit")
         option = input("option: ")
         if option == "1":
             generate_embedding_from_csv_file(os.path.join(curdir, "qa.csv"))
@@ -132,6 +148,20 @@ if __name__ == "__main__":
                         reply = get_answer_from_embedding(question, qa_list, topk=1)
                         print(reply[0])
         elif option == "3":
+            #需要输入问题
+            question = input("question: ")
+            sim_question_list = generate_relevant_queries(question)
+            emb_sim_question_list = em_utils.get_embeddings(sim_question_list, engine="text-embedding-ada-002")
+            emb_question = em_utils.get_embeddings([question], engine="text-embedding-ada-002")
+            for i in range(0, len(emb_sim_question_list)):
+                sim = em_utils.cosine_similarity(emb_question, emb_sim_question_list[i])
+                print(f"question: {sim_question_list[i]}, sim: {sim}")
+
+        elif option == "4":
+            prompt = """You as a story writer, I give you 100 words, you need to choose 10 words from them and generate an article on a cultural or artistic topic， keeping it to 200 words or less. 100 words are as follows：["divide", "preliminary", "expand", "interior", "process", "reside", "determine", "oppose", "rural", "arrange", "lodging", "broadcast", "project", "punctual", "wealth", "motive", "construct", "latitude", "explode", "imperative", "incidence", "dedicate", "commerce", "displace", "fuse", "impair", "boundary", "democratic", "persuade", "radical", "renovate", "undertake", "prohibit", "receipt", "topic", "delight", "illustrate", "economic", "allocate", "expose", "subtle", "emphasize", "aware", "strategy", "intermediate", "estimate", "genuine", "prevail", "nurture", "isolate", "configure", "represent", "clinic", "constrain", "orchestra", "rebel", "oblige", "disrupt", "withdraw", "contribution", "interpret", "amplitude", "mechanical", "divert", "pension", "dynamic", "appreciate", "ignite", "petrol", "wreck", "amend", "prosper", "previous", "neglect", "prolong", "coordinate", "abandon", "penetrate", "inspect", "layout", "cumbersome", "orbit", "hamster", "propose", "necessitate", "eternal", "agitate", "authorize", "coup", "suspend", "implement", "govern", "reveal", "favorable", "autopilot", "elicit", "swift", "meadow", "fragile", "distort", "evaluate"]
+json format:{'story':{'english': 'story in english', 'chinese': 'story in simplified chinese', 'selected_words': 'selected words'}}"""
+            result = helper.json_gpt(prompt)
+            print(result)
             break
         else:
             print("invalid option")

@@ -1,5 +1,6 @@
 #encoding utf-8
 
+import time
 import os
 import ast
 import json
@@ -18,6 +19,23 @@ from common.log import logger
 import config
 from plugins import *
 
+#write a function 请求openai chatcomplition ，只返回正确的json
+def json_gpt(input:str)->json:
+    completion = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "Output only valid JSON"},
+            {"role": "user", "content": input},
+        ],
+        temperature=0.5,
+    )
+
+    text = completion.choices[0].message.content
+    parsed = json.loads(text)
+
+    return parsed
+
+
 @plugins.register(
     name="FAQ",
     desire_priority=0,
@@ -34,7 +52,9 @@ class FAQ(Plugin):
         pass
     def generate_embedding_from_csv_file(self, file):
         pass
-    def get_chatgpt_style_sim(self, quary, question) -> float:
+    def get_chatgpt_style_sim(self, quary, question, retry_count=0) -> json:
+        pass
+    def generate_relevant_queries(self, question)->list:
         pass
 
     def __init__(self):
@@ -70,7 +90,13 @@ class FAQ(Plugin):
         except Exception as e:
             logger.warn("[FAQ] init failed")
             raise e
-
+    def is_valid_json_string(self, s):
+        try:
+            json.loads(s)
+            return True
+        except json.JSONDecodeError:
+            return False
+        
     def on_handle_context(self, e_context: EventContext):
         if e_context["context"].type != ContextType.TEXT:
             return
@@ -125,16 +151,33 @@ class FAQ(Plugin):
         for i in range(0, len(topk_idx)):
             cos_sim = cos_sim[topk_idx[i]]
             logger.debug("[FAQ] cos_sim: {}, answer: {}".format(cos_sim, qa_list[topk_idx[i]]["answer"]))
-            if cos_sim > self.cos_sim_threshold:
+            if cos_sim >= self.cos_sim_threshold:
                 answer.append(qa_list[topk_idx[i]]["answer"])
             else:
+                sim_question_list = self.generate_relevant_queries(question)
+                emb_list = em_utils.get_embeddings(sim_question_list, engine=self.embedding_model)
+                for j in range(0, len(emb_list)):
+                    cos_sim = em_utils.cosine_similarity(qa_list[topk_idx[i]]["emb"], emb_list[j])
+                    top_question = qa_list[topk_idx[i]]["question"]
+                    logger.debug(f"question: {top_question}, rel_question: {sim_question_list[j]}, sim: {cos_sim}")
+                    if cos_sim >= self.cos_sim_threshold:
+                        answer.append(qa_list[topk_idx[i]]["answer"])
+                        break
+
                 #如果相似度小于cos_threshold，用chatgpt计算相似度
-                gpt_sim = self.get_chatgpt_style_sim(question, qa_list[topk_idx[i]]["question"])
-                if float(gpt_sim) > self.gpt_sim_threshold:
-                    answer.append(qa_list[topk_idx[i]]["answer"])
-                    #print gpt_sim
-                    #print("gpt_sim: {}, answer: {}", gpt_sim, qa_list[topk_idx[i]]["answer"])
-                    logger.debug("[FAQ] gpt_sim: {}, answer: {}".format(gpt_sim, qa_list[topk_idx[i]]["answer"]))
+                # gpt_sim_json = self.get_chatgpt_style_sim(question, qa_list[topk_idx[i]]["question"], 0)
+                # #判断返回的json是否正确，并且包含sim字段
+                # if gpt_sim_json is None or "sim" not in gpt_sim_json:
+                #     logger.warn("[FAQ] get_chatgpt_style_sim return json is None or not contains sim field")
+                #     continue
+
+                # gpt_sim = gpt_sim_json["sim"]
+                # if isinstance(gpt_sim, str):
+                #     gpt_sim = float(gpt_sim)
+                # logger.debug("[FAQ] gpt_sim: {}, answer: {}".format(gpt_sim, qa_list[topk_idx[i]]["answer"]))
+                # if gpt_sim >= self.gpt_sim_threshold:
+                #     answer.append(qa_list[topk_idx[i]]["answer"])
+                    
         #即使没有找到答案，也不再请求openai chatcomplition，插件处理完了，还会交给chat_channel处理
         return answer
     
@@ -162,7 +205,7 @@ class FAQ(Plugin):
            q = df.iloc[i, 0]
            a = df.iloc[i, 1]
            emb = get_embedding(q, engine=self.embedding_model)
-           dict = {"question": q, "answer": a, "emb": emb}
+           dict = {"question": q, "answer": a.strip(), "emb": emb}
            vec.append(dict)
        #save to csv file
        df = pd.DataFrame(vec)
@@ -182,19 +225,61 @@ class FAQ(Plugin):
         )
         return res.choices[0]["message"]["content"]
     
-    def get_chatgpt_style_sim(self, query, question) -> float:
+    def get_chatgpt_style_sim(self, query, question, retry_count) -> json:
         #生成一个chatgpt prompt，用于计算query和question的相似度,返回float
-        prompt = f"计算下面两段话的相似度\n{query} \n{question}，相似度用[0,1]之间的小数表示，数值越大，相似度越高,只需要给我返回这个相似度值即可"
-        messages = [{"role": "user", "content": prompt}]
+        prompt = f"对比下面两段话的相似度\n{query} \n{question}，相似度用[0,1]之间的小数表示，数值越大，相似度越高。提供JSON格式的输出，key为sim，value为相似度。"
+        messages = [{"role": "system", "content": "Output only valid JSON"},{"role": "user", "content": prompt}]
         #调用openai chatcomplition api 计算query和question的相似度
-        res = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=messages,
-            temperature=0.0,
-            max_tokens=2000
-        )
+        try:
+            res = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=messages,
+                temperature=0.0,
+                max_tokens=2000
+            )
+            
+            res_content = res.choices[0]["message"]["content"]
+            logger.debug("[OPEN_AI] res: {}".format(res_content))
+            if self.is_valid_json_string(res_content):
+                return json.loads(res_content)
+            else:
+                logger.warn("[OPEN_AI] res_content is not valid json string: {}".format(res_content))
+                return None
+        except Exception as e:
+            need_retry = retry_count < 2
+            result = {"sim":0.0}
+            if isinstance(e, openai.error.RateLimitError):
+                logger.warn("[OPEN_AI] RateLimitError: {}".format(e))
+                if need_retry:
+                    time.sleep(20)
+            elif isinstance(e, openai.error.Timeout):
+                logger.warn("[OPEN_AI] Timeout: {}".format(e))
+                if need_retry:
+                    time.sleep(5)
+            elif isinstance(e, openai.error.APIConnectionError):
+                logger.warn("[OPEN_AI] APIConnectionError: {}".format(e))
+                need_retry = False
+            else:
+                logger.warn("[OPEN_AI] Exception: {}".format(e))
+                need_retry = False
 
-        return res.choices[0]["message"]["content"]
+            if need_retry:
+                logger.warn("[OPEN_AI] 第{}次重试".format(retry_count + 1))
+                return self.get_chatgpt_style_sim(query, question, retry_count + 1)
+            else:
+                return result
+    def generate_relevant_queries(self, question)->list:
+        queries_input = f"""
+        生成一系列跟此问题相关的问题。这些问题应该是一些你认为用户可能会从不同角度提出的同一个问题。
+        在问题中使用关键词的变体，尽可能的概括，包括你能想到的尽可能多的提问。
+        比如, 包含的查询就想这样 ['keyword_1 keyword_2', 'keyword_1', 'keyword_2']
+
+        User question: {question}
+
+        Format: {{"queries": ["query_1", "query_2", "query_3"]}}
+        """
+        queries = json_gpt(queries_input)
+        return queries["queries"]
 
 #write a terminal command to test
 if __name__ == "__main__":
