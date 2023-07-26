@@ -17,24 +17,8 @@ from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 import config
+from helper import json_gpt, touch_up_the_text
 from plugins import *
-
-#write a function 请求openai chatcomplition ，只返回正确的json
-def json_gpt(input:str)->json:
-    completion = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "Output only valid JSON"},
-            {"role": "user", "content": input},
-        ],
-        temperature=0.5,
-    )
-
-    text = completion.choices[0].message.content
-    parsed = json.loads(text)
-
-    return parsed
-
 
 @plugins.register(
     name="FAQ",
@@ -56,6 +40,7 @@ class FAQ(Plugin):
         pass
     def generate_relevant_queries(self, question)->list:
         pass
+    
 
     def __init__(self):
         super().__init__()
@@ -181,11 +166,6 @@ class FAQ(Plugin):
         #即使没有找到答案，也不再请求openai chatcomplition，插件处理完了，还会交给chat_channel处理
         return answer
     
-        #如果 answer列表为空，用question请求openai chatcomplition
-        # if len(answer) <= 0:
-        #    answer.append(self.get_answer_from_openai(question))
-        
-    
     def get_faq(self, question) -> Reply:
         #get answer
         answer = self.get_answer_from_embedding(question, self.qa_list, topk=1)
@@ -197,15 +177,20 @@ class FAQ(Plugin):
 
     #write a function from csv file read quesion and answer 
     #then get question embedding and save to csv file
+    #then touch up the text
     def generate_embedding_from_csv_file(self, file):
        #read csv file
        df = pd.read_csv(file, encoding='utf-8')
        vec = []
        for i in range(0, df.shape[0]):  
-           q = df.iloc[i, 0]
-           a = df.iloc[i, 1]
-           emb = get_embedding(q, engine=self.embedding_model)
-           dict = {"question": q, "answer": a.strip(), "emb": emb}
+           question = df.iloc[i, 0]
+           answer = df.iloc[i, 1]
+           emb = get_embedding(question, engine=self.embedding_model)
+           touched_answer = touch_up_the_text(answer, 0)
+           if len(touched_answer) == 0:
+               touched_answer = answer
+           logger.debug("[FAQ] answer: {}, touched_answer: {}".format(answer, touched_answer))
+           dict = {"question": question, "answer": touched_answer.strip(), "emb": emb}
            vec.append(dict)
        #save to csv file
        df = pd.DataFrame(vec)
@@ -280,6 +265,7 @@ class FAQ(Plugin):
         """
         queries = json_gpt(queries_input)
         return queries["queries"]
+    
 
 #write a terminal command to test
 if __name__ == "__main__":

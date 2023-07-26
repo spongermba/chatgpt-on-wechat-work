@@ -1,5 +1,6 @@
 import os
 import ast
+import time
 import helper
 import pandas as pd
 import numpy as np
@@ -85,10 +86,14 @@ def generate_embedding_from_csv_file(file):
    df = pd.read_csv(file, encoding='utf-8')
    vec = []
    for i in range(0, df.shape[0]):  
-       q = df.iloc[i, 0]
-       a = df.iloc[i, 1]
-       emb = get_embedding(q, engine="text-embedding-ada-002")
-       dict = {"question": q, "answer": a, "emb": emb}
+       question = df.iloc[i, 0]
+       answer = df.iloc[i, 1]
+       emb = get_embedding(question, engine="text-embedding-ada-002")
+       touched_answer = helper.touch_up_the_text(answer, 0)
+       if len(touched_answer) == 0:
+           touched_answer = answer
+       print("[FAQ] answer: {}, touched_answer: {}".format(answer, touched_answer))
+       dict = {"question": question, "answer": touched_answer.strip(), "emb": emb}
        vec.append(dict)
    #save to csv file
    df = pd.DataFrame(vec)
@@ -124,10 +129,10 @@ if __name__ == "__main__":
         print("1. generate embedding file")
         print("2. get answer from embedding file")
         print("3. generate relevant queries")
-        print("4. exit")
+        print("4. words generate story")
         option = input("option: ")
         if option == "1":
-            generate_embedding_from_csv_file(os.path.join(curdir, "qa.csv"))
+            generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
         elif option == "2":
             #遍历当前目录下是否存在qa_embedding.csv文件
             #如果不存在则打印提示信息
@@ -158,10 +163,15 @@ if __name__ == "__main__":
                 print(f"question: {sim_question_list[i]}, sim: {sim}")
 
         elif option == "4":
-            prompt = """You as a story writer, I give you 100 words, you need to choose 10 words from them and generate an article on a cultural or artistic topic， keeping it to 200 words or less. 100 words are as follows：["divide", "preliminary", "expand", "interior", "process", "reside", "determine", "oppose", "rural", "arrange", "lodging", "broadcast", "project", "punctual", "wealth", "motive", "construct", "latitude", "explode", "imperative", "incidence", "dedicate", "commerce", "displace", "fuse", "impair", "boundary", "democratic", "persuade", "radical", "renovate", "undertake", "prohibit", "receipt", "topic", "delight", "illustrate", "economic", "allocate", "expose", "subtle", "emphasize", "aware", "strategy", "intermediate", "estimate", "genuine", "prevail", "nurture", "isolate", "configure", "represent", "clinic", "constrain", "orchestra", "rebel", "oblige", "disrupt", "withdraw", "contribution", "interpret", "amplitude", "mechanical", "divert", "pension", "dynamic", "appreciate", "ignite", "petrol", "wreck", "amend", "prosper", "previous", "neglect", "prolong", "coordinate", "abandon", "penetrate", "inspect", "layout", "cumbersome", "orbit", "hamster", "propose", "necessitate", "eternal", "agitate", "authorize", "coup", "suspend", "implement", "govern", "reveal", "favorable", "autopilot", "elicit", "swift", "meadow", "fragile", "distort", "evaluate"]
-json format:{'story':{'english': 'story in english', 'chinese': 'story in simplified chinese', 'selected_words': 'selected words'}}"""
-            result = helper.json_gpt(prompt)
-            print(result)
+            #循环10次，每次生成一个故事
+            for i in range(0, 10):
+
+                prompt = """You as a story writer, I give you a set of words, you need to choose 10 words from them and generate an article on the topic of culture and art， keeping it to 200 words or less. The list of words is as follows：["divide", "preliminary", "expand", "interior", "process", "reside", "determine", "oppose", "rural", "arrange", "lodging", "broadcast", "project", "punctual", "wealth", "motive", "construct", "latitude", "explode", "imperative", "incidence", "dedicate", "commerce", "displace", "fuse", "impair", "boundary", "democratic", "persuade", "radical", "renovate", "undertake", "prohibit", "receipt", "topic", "delight", "illustrate", "economic", "allocate", "expose", "subtle", "emphasize", "aware", "strategy", "intermediate", "estimate", "genuine", "prevail", "nurture", "isolate", "configure", "represent", "clinic", "constrain", "orchestra", "rebel", "oblige", "disrupt", "withdraw", "contribution", "interpret", "amplitude", "mechanical", "divert", "pension", "dynamic", "appreciate", "ignite", "petrol", "wreck"]
+json format:{'story':{'english': 'story in english', 'chinese': 'story in simplified chinese', 'selected_words': ['word1', 'word2']}}"""
+                result = helper.json_gpt(prompt)
+                print(result)
+                #休息一会
+                time.sleep(2)
             break
         else:
             print("invalid option")
