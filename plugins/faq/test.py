@@ -1,4 +1,5 @@
 import os
+import sys
 import ast
 import time
 import helper
@@ -13,8 +14,14 @@ from langchain.vectorstores import Chroma
 from langchain.docstore.document import Document
 
 OPENAI_API_KEY = "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"
-CHROMA_DB_DIR = ".\\vectordb\\chroma_db\\"
+if sys.platform == 'win32':
+    CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
+else:
+    CHROMA_DB_DIR = "/vectordb/chroma_db/"
 CHROMA_COLLECTION_NAME = "sponger_bot"
+SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
+
+similar_keywords = []
 
 def load_faq_from_embedding_file(file) -> list:
     #read csv file
@@ -70,13 +77,28 @@ def get_answer_from_chroma(question, topk=1) ->list:
     result = db.similarity_search_with_score(question, k=topk)
     answers = []
     for i in range(0, len(result)):
-        question = result[i][0].page_content
+        meta_question = result[i][0].metadata["question"]
         answer = result[i][0].metadata["answer"]
         score = result[i][1]
-        print("score: {}, answer: {}".format(score, answer))
+        print("score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
         if 1-score > 0.93:
             answers.append(answer)
-    
+    #如果 answer列表为空，生成相似问题，从相似问题中查找是否有满足阈值的答案
+    if len(answers) <= 0:
+        rel_questions = generate_relevant_queries(question)
+        total_result = []
+        for i in range(0, len(rel_questions)):
+            result = db.similarity_search_with_score(rel_questions[i], k=topk)
+            total_result.extend(result)
+        #根据score对total_result进行排序
+        sorted_result = sorted(total_result, key=lambda x: x[1])
+        #遍历total_result，如果score大于0.9，将answer加入到answers中
+        for i in range(0, len(sorted_result)):
+            meta_question = sorted_result[i][0].metadata["question"]
+            score = sorted_result[i][1]
+            print("score: {}, meta_question: {}".format(score, meta_question))
+            if 1-score > 0.88:
+                answers.append(sorted_result[i][0].metadata["answer"])
     return answers
 
 def get_answer_from_openai(question) ->str:
@@ -170,39 +192,81 @@ def generate_relevant_queries(question:str)->list:
     import json
 
     example = [{"query":"清华是不是很看重学历？", 
-                "similar_queries": ["清华大学是否看重学历？", 
-                                    "清华大学对学历要求严格吗？", 
-                                    "学历在清华的录取中占据了多大的比重？", 
-                                    "清华大学会考虑学历以外的其他申请人背景吗？",
+                "similar_keywords":["学历", "背景"],
+                "similar_queries": ["清华大学对学历要求严格吗？", 
                                     "清华对申请人的学历有什么具体要求？",
-                                    "清华大学录取过程中，对学历的重视程度与其他条件相比如何？",
-                                    "如果学历不够出色，还有其他方式能增加被清华录取的机会吗？",
                                     "在清华大学的招生中，学历是否是决定性因素之一？",
                                     "清华大学录取时是否会对学历进行严格的筛选？",
-                                    "学历在清华大学的招生政策中占据了多大的位置？"]}]
+                                    "清华的招生政策是否存在对学历的硬性要求？",
+                                    "清华是不是很看重背景？",
+                                    "学历对于申请清华的影响有多大？",
+                                    "清华对于申请者背景会有什么要求？",
+                                    "学历在清华的招生评审中扮演着怎样的角色？",
+                                    "清华是不是很看重背景？"]},
+                {"query":"人大mba提面流程？", 
+                 "similar_keywords":["提面", "提前面试", "面试", "提前批", "提前面", "提前复试", "预面试"],
+                 "similar_queries": ["人大mba提前面试流程是怎样的？", 
+                                    "人民大学mba的面试流程是怎么样的？",
+                                    "人大mba提前批的流程是什么样的？",
+                                    "人大mba有提前面这个环节吗？可以告诉我一下相关流程吗？",
+                                    "人大mba提前复试的步骤是怎样的？",
+                                    "人大mba的预面试是什么意思？有什么准备工作吗？",
+                                    "人大mba提前面试一般在什么时间进行？",
+                                    "人大mba提前批的录取标准是什么？",
+                                    "人大mba预面试需要准备些什么？",
+                                    "请问人大mba提前复试的内容有哪些？"]},    ]
     example_prompt = ChatPromptTemplate.from_messages(
             [('human', '{query}'), ('ai', '{similar_queries}')]
     )
     few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
-                                                       example_prompt=example_prompt)
+                                                      example_prompt=example_prompt)
+    # similar_keywords = [["清华大学", "清华"], 
+    #                     ["北京大学", "北大"],
+    #                     ["光华管理学院", "光华管院", "光华"],
+    #                     ["人民大学", "人大"], 
+    #                     ["提面", "提前面试", "提前面"],
+    #                     ["北京师范大学", "北师大", "北师"],
+    #                     ["非全日制", "非全"],
+    #                     ["北京理工", "北理"]]
+    
+    sys_prompt = f"""
+    你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
+    第一步，根据每一组相似关键词列表所有可能进行排列组合替换{similar_keywords}；
+    第二步，替换完成的问题，生成可能的不同角度的相似问题；
+    第三步，根据生成的相似问题，生成最终的相似问题列表。
+    """
     final_prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", "你是一个mba面试老师，对于学生的每一个问题，需要想出10个相似问题"),
+            ("system", sys_prompt),
             few_shot_prompt,
             ("human", "{query}"),
         ]
     )
     final_prompt.format(query=question)
     print(final_prompt)
-    chain = final_prompt | ChatOpenAI(temperature=0.0)
+    chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
     output = chain.invoke({"query": question})
     content_str = output.content.replace("'", '"')
-    json_output = json.loads(content_str)
-    print(json_output)
+    try:
+        json_output = json.loads(content_str)
+    except json.JSONDecodeError as e:
+        print("json decode error: {}".format(e))
     return  json_output
 
     queries = helper.json_gpt(queries_input)
     return queries["queries"]
+
+import math
+def load_similar_keywords()->list:
+    df = pd.read_csv(os.path.join(curdir, "similar_keywords.csv"), encoding='utf-8')
+    for i in range(0, df.shape[0]):
+        #去掉list中的空字符串元素
+        #keywords = list(filter(lambda x: x != "" and not math.isnan(x), list(df.iloc[i, :])))
+        keywords = [x for x in list(df.iloc[i, :]) 
+                    if (isinstance(x, str) and x != "") 
+                    or (isinstance(x, float) and not math.isnan(x))]
+        similar_keywords.append(keywords)
+    return similar_keywords
 #langchain
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
@@ -252,6 +316,7 @@ if __name__ == "__main__":
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
     openai.api_key = OPENAI_API_KEY
     curdir = os.path.dirname(__file__)
+    load_similar_keywords()
     #给出菜单选项，选择1，2，3。1是生成qa_embedding.csv文件，2是从qa_embedding.csv文件中读取数据，3是退出
     #如果选择1，则调用generate_embedding_from_csv_file函数生成qa_embedding.csv文件
     #如果选择2，则调用load_faq_from_embedding_file函数从qa_embedding.csv文件中读取数据
@@ -266,10 +331,10 @@ if __name__ == "__main__":
         print("5. langchain text qa")
         print("6. langchain long text summary")
         print("7. get answer from chroma")
+        print("8. generate chroma from csv file")
         option = input("option: ")
         if option == "1":
-            #generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
-            generate_embedding_from_csv_file_chroma(os.path.join(curdir, "qa_test.csv"))
+            generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
         elif option == "2":
             #遍历当前目录下是否存在qa_embedding.csv文件
             #如果不存在则打印提示信息
@@ -315,11 +380,12 @@ json format:{'story':{'english': 'story in english', 'chinese': 'story in simpli
             langchain_text_qa(os.path.join(curdir, "summary_test.pdf"), question)
         elif option == "6":
             langchain_long_text_summary(os.path.join(curdir, "summary_test.pdf"))
-            break
         elif option == "7":
             question = input("question: ")
             answers = get_answer_from_chroma(question, 4)
             print(answers)
+        elif option == "8":
+            generate_embedding_from_csv_file_chroma(os.path.join(curdir, "beijingzexiao_v1.csv"))
         else:
             print("invalid option")
 

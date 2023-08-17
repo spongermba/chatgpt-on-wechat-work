@@ -1,6 +1,11 @@
 {
     "need_context": "true",
     "embedding_model": "text-embedding-ada-002",
-    "cos_sim_threshold": 0.93,
-    "gpt_sim_threshold": 0.8
+    "cos_sim_threshold_max": 0.92,
+    "cos_sim_threshold_min": 0.87,
+    "sentence_size": 100, 
+    "chunk_size": 260,
+    "vector_search_top_k": 5,
+    "vector_search_score_threshold": 500,
+    "missed_case_tips": "对不起，语料库中没有合适的答案"
 }

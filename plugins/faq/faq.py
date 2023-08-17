@@ -2,9 +2,10 @@
 
 import time
 import os
+import sys
 import ast
 import json
-import requests
+import math
 import pandas as pd
 import numpy as np
 import openai
@@ -17,8 +18,23 @@ from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 import config
-from helper import json_gpt, touch_up_the_text
+from .helper import json_gpt, touch_up_the_text
 from plugins import *
+
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.docstore.document import Document
+from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
+from langchain.prompts.few_shot import FewShotPromptTemplate
+from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+
+if sys.platform == 'win32':
+    CHROMA_DB_DIR = ".\\vectordb\\chroma_db\\"
+else:
+    CHROMA_DB_DIR = "/vectordb/chroma_db/"
+CHROMA_COLLECTION_NAME = "sponger_bot"
+SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 
 @plugins.register(
     name="FAQ",
@@ -36,18 +52,25 @@ class FAQ(Plugin):
         pass
     def generate_embedding_from_csv_file(self, file):
         pass
+    def generate_embedding_from_csv_file_chroma(self, file):
+        pass
     def get_chatgpt_style_sim(self, quary, question, retry_count=0) -> json:
         pass
     def generate_relevant_queries(self, question)->list:
         pass
-    
+    def generate_relevant_queries_langchain(self, question)->list:
+        pass
+    def get_answer_from_chroma(self, question, topk=1) ->list:
+        pass
+    def load_similar_keywords(self, file):
+        pass
 
     def __init__(self):
         super().__init__()
         try:
             # init openai
             openai.api_key = config.conf().get("open_ai_api_key")
-            
+            os.environ["OPENAI_API_KEY"] = config.conf().get("open_ai_api_key")
             # load config
             curdir = os.path.dirname(__file__)
             config_path = os.path.join(curdir, "faq_config.json")
@@ -61,13 +84,13 @@ class FAQ(Plugin):
                     conf = json.load(f)
             self.need_context = conf["need_context"]
             self.embedding_model = conf["embedding_model"]
-            self.cos_sim_threshold = conf["cos_sim_threshold"]
-            self.gpt_sim_threshold = conf["gpt_sim_threshold"]
-            logger.info("[FAQ] config loaded. need_context: %s" % self.need_context)
-
+            self.cos_sim_threshold_max = conf["cos_sim_threshold_max"]
+            self.cos_sim_threshold_min = conf["cos_sim_threshold_min"]
+            self.similar_keywords = []
+            self.load_similar_keywords(os.path.join(curdir, SIMILAR_KEYWORDS_FILE))
             # load faq
-            self.qa_list = self.load_faq_from_embedding_file(os.path.join(curdir, "qa_embedding.csv"))
-            logger.info("[FAQ] faq loaded. qa_list size: %d" % len(self.qa_list))
+            #self.qa_list = self.load_faq_from_embedding_file(os.path.join(curdir, "qa_embedding.csv"))
+            #logger.info("[FAQ] faq loaded. qa_list size: %d" % len(self.qa_list))
 
             # register event handler
             self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
@@ -136,7 +159,7 @@ class FAQ(Plugin):
         for i in range(0, len(topk_idx)):
             cos_sim = cos_sim[topk_idx[i]]
             logger.debug("[FAQ] cos_sim: {}, answer: {}".format(cos_sim, qa_list[topk_idx[i]]["answer"]))
-            if cos_sim >= self.cos_sim_threshold:
+            if cos_sim >= self.cos_sim_threshold_max:
                 answer.append(qa_list[topk_idx[i]]["answer"])
             else:
                 sim_question_list = self.generate_relevant_queries(question)
@@ -145,30 +168,51 @@ class FAQ(Plugin):
                     cos_sim = em_utils.cosine_similarity(qa_list[topk_idx[i]]["emb"], emb_list[j])
                     top_question = qa_list[topk_idx[i]]["question"]
                     logger.debug(f"question: {top_question}, rel_question: {sim_question_list[j]}, sim: {cos_sim}")
-                    if cos_sim >= self.cos_sim_threshold:
+                    if cos_sim >= self.cos_sim_threshold_max:
                         answer.append(qa_list[topk_idx[i]]["answer"])
                         break
-
-                #如果相似度小于cos_threshold，用chatgpt计算相似度
-                # gpt_sim_json = self.get_chatgpt_style_sim(question, qa_list[topk_idx[i]]["question"], 0)
-                # #判断返回的json是否正确，并且包含sim字段
-                # if gpt_sim_json is None or "sim" not in gpt_sim_json:
-                #     logger.warn("[FAQ] get_chatgpt_style_sim return json is None or not contains sim field")
-                #     continue
-
-                # gpt_sim = gpt_sim_json["sim"]
-                # if isinstance(gpt_sim, str):
-                #     gpt_sim = float(gpt_sim)
-                # logger.debug("[FAQ] gpt_sim: {}, answer: {}".format(gpt_sim, qa_list[topk_idx[i]]["answer"]))
-                # if gpt_sim >= self.gpt_sim_threshold:
-                #     answer.append(qa_list[topk_idx[i]]["answer"])
-                    
-        #即使没有找到答案，也不再请求openai chatcomplition，插件处理完了，还会交给chat_channel处理
         return answer
     
+    def get_answer_from_chroma(self, question, topk=1) ->list:
+        embedding = OpenAIEmbeddings()
+        db = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
+        if db is None:
+            logger.error("[FAQ] chroma db is None")
+            return []
+        
+        result = db.similarity_search_with_score(question, k=topk)
+        logger.debug("[FAQ] question sim result: {}".format(result))
+        answers = []
+        for i in range(0, len(result)):
+            meta_question = result[i][0].metadata["question"]
+            answer = result[i][0].metadata["answer"]
+            score = result[i][1]
+            logger.debug("score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
+            if self.cos_sim_threshold_max + score <= 1:
+                answers.append(answer)
+        #如果 answer列表为空，生成相似问题，从相似问题中查找是否有满足阈值的答案
+        if len(answers) <= 0:
+            rel_questions = self.generate_relevant_queries_langchain(question)
+            total_result = []
+            for i in range(0, len(rel_questions)):
+                result = db.similarity_search_with_score(rel_questions[i], k=topk)
+                logger.debug("[FAQ] relevant question result: {}".format(result))
+                total_result.extend(result)
+            #根据score对total_result进行排序
+            sorted_result = sorted(total_result, key=lambda x: x[1])
+            #遍历total_result，如果score大于0.9，将answer加入到answers中
+            for i in range(0, len(sorted_result)):
+                meta_question = sorted_result[i][0].metadata["question"]
+                score = sorted_result[i][1]
+                logger.debug("[FAQ] score: {}, meta_question: {}".format(score, meta_question))
+                if self.cos_sim_threshold_min + score <= 1:
+                    answers.append(sorted_result[i][0].metadata["answer"])
+        return answers
+
     def get_faq(self, question) -> Reply:
         #get answer
-        answer = self.get_answer_from_embedding(question, self.qa_list, topk=1)
+        #answer = self.get_answer_from_embedding(question, self.qa_list, topk=1)
+        answer = self.get_answer_from_chroma(question, topk=1)
         #return reply
         if len(answer) > 0:
             return Reply(content=answer[0], type=ReplyType.TEXT)
@@ -198,6 +242,24 @@ class FAQ(Plugin):
        curdir = os.path.dirname(file)
        df.to_csv(os.path.join(curdir, "qa_embedding.csv"), index=False)
        logger.info("[FAQ] generate qa_embedding.csv success")
+
+    def generate_embedding_from_csv_file_chroma(self, file):
+        #read csv file
+        df = pd.read_csv(file, encoding='utf-8')
+        meta_datas = []
+        texts = []
+        for i in range(0, df.shape[0]):
+            question = str(df.iloc[i, 0]).strip()
+            answer = str(df.iloc[i, 1]).strip()
+            if len(question) == 0 or len(answer) == 0:
+                continue
+            dict = {"question": question, "answer": answer}
+            meta_datas.append(dict)
+            texts.append(question)
+        
+        embedding = OpenAIEmbeddings()
+        chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
+        chroma.add_texts(texts, meta_datas)
 
     def get_answer_from_openai(self, question) ->str:
         #get answer from openai chatcomplition
@@ -265,8 +327,67 @@ class FAQ(Plugin):
         """
         queries = json_gpt(queries_input)
         return queries["queries"]
+    def generate_relevant_queries_langchain(self, question)->list:
+        example = [{"query":"清华是不是很看重学历？", 
+                    "similar_queries": ["清华大学对学历要求严格吗？", 
+                                        "清华对申请人的学历有什么具体要求？",
+                                        "在清华大学的招生中，学历是否是决定性因素之一？",
+                                        "清华大学录取时是否会对学历进行严格的筛选？",
+                                        "清华对学历要求很高？"]},
+                    {"query":"人大提面考什么？", 
+                    "similar_queries": ["人民大学提面考啥？", 
+                                        "人大提前面试考什么？",
+                                        "人民大学提前面试考哪些？",
+                                        "人大提前面试会问些什么问题？",
+                                        "人大提前面试会问些什么问题？"]},    ]
+        example_prompt = ChatPromptTemplate.from_messages(
+                [('human', '{query}'), ('ai', '{similar_queries}')]
+        )
+        few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
+                                                          example_prompt=example_prompt)
+        similar_keywords = [["清华大学", "清华"], 
+                            ["北京大学", "北大"],
+                            ["光华管理学院", "光华管院", "光华"],
+                            ["人民大学", "人大"], 
+                            ["提面", "提前面试", "提前面"],
+                            ["北京师范大学", "北师大", "北师"],
+                            ["非全日制", "非全"],
+                            ["北京理工", "北理"]]
+        sys_prompt = f"""
+        你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
+        第一步，根据每一组相似关键词列表所有可能进行排列组合替换{similar_keywords}；
+        第二步，根据替换完成的问题，生成可能的不同角度的相似问题；
+        第三步，根据生成的相似问题，生成最终的相似问题列表。
+        """
+        final_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", sys_prompt),
+                few_shot_prompt,
+                ("human", "{query}"),
+            ]
+        )
+        final_prompt.format(query=question)
+        print(final_prompt)
+        chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+        output = chain.invoke({"query": question})
+        content_str = output.content.replace("'", '"')
+        try:
+            json_output = json.loads(content_str)
+        except json.JSONDecodeError as e:
+            logger.error("[FAQ] json decode error: {}".format(e))
+        logger.debug("[FAQ] relevant question: {}".format(json_output))
+        return  json_output
     
-
+    def load_similar_keywords(self, file):
+        self.similar_keywords.clear()
+        df = pd.read_csv(file, encoding='utf-8')
+        for i in range(0, df.shape[0]):
+            #去掉list中的空字符串元素
+            keywords = [x for x in list(df.iloc[i, :]) 
+                        if (isinstance(x, str) and x != "") 
+                        or (isinstance(x, float) and not math.isnan(x))]
+            self.similar_keywords.append(keywords)
+    
 #write a terminal command to test
 if __name__ == "__main__":
     curdir = os.path.dirname(__file__)
