@@ -85,6 +85,7 @@ class FAQ(Plugin):
             self.need_context = conf["need_context"]
             self.embedding_model = conf["embedding_model"]
             self.cos_sim_threshold_max = conf["cos_sim_threshold_max"]
+            self.cos_sim_threshold_mid = conf["cos_sim_threshold_mid"]
             self.cos_sim_threshold_min = conf["cos_sim_threshold_min"]
             self.similar_keywords = []
             self.load_similar_keywords(os.path.join(curdir, SIMILAR_KEYWORDS_FILE))
@@ -180,23 +181,25 @@ class FAQ(Plugin):
             logger.error("[FAQ] chroma db is None")
             return []
         
-        result = db.similarity_search_with_score(question, k=topk)
-        logger.debug("[FAQ] question sim result: {}".format(result))
+        ori_result = db.similarity_search_with_score(question, k=topk)
+        #logger.debug("[FAQ] question sim result: {}".format(ori_result))
         answers = []
-        for i in range(0, len(result)):
-            meta_question = result[i][0].metadata["question"]
-            answer = result[i][0].metadata["answer"]
-            score = result[i][1]
-            logger.debug("score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
+        for i in range(0, len(ori_result)):
+            meta_question = ori_result[i][0].metadata["question"]
+            answer = ori_result[i][0].metadata["answer"]
+            score = ori_result[i][1]
+            logger.debug("[FAQ] origin score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
             if self.cos_sim_threshold_max + score <= 1:
                 answers.append(answer)
         #如果 answer列表为空，生成相似问题，从相似问题中查找是否有满足阈值的答案
         if len(answers) <= 0:
-            rel_questions = self.generate_relevant_queries_langchain(question)
             total_result = []
-            for i in range(0, len(rel_questions)):
-                result = db.similarity_search_with_score(rel_questions[i], k=topk)
-                logger.debug("[FAQ] relevant question result: {}".format(result))
+            #先把原始问题匹配结果放进总结果列表
+            total_result.extend(ori_result)
+            rele_questions = self.generate_relevant_queries_langchain(question)
+            for i in range(0, len(rele_questions)):
+                result = db.similarity_search_with_score(rele_questions[i], k=topk)
+                #logger.debug("[FAQ] relevant question result: {}".format(result))
                 total_result.extend(result)
             #根据score对total_result进行排序
             sorted_result = sorted(total_result, key=lambda x: x[1])
@@ -204,9 +207,15 @@ class FAQ(Plugin):
             for i in range(0, len(sorted_result)):
                 meta_question = sorted_result[i][0].metadata["question"]
                 score = sorted_result[i][1]
-                logger.debug("[FAQ] score: {}, meta_question: {}".format(score, meta_question))
-                if self.cos_sim_threshold_min + score <= 1:
+                logger.debug("[FAQ] relevant score: {}, meta_question: {}".format(score, meta_question))
+                if self.cos_sim_threshold_mid + score <= 1:
                     answers.append(sorted_result[i][0].metadata["answer"])
+            #如果依赖没有召回答案，找到最接近的问题，提示用户是否在找这个问题
+            if len(answers) <= 0 and len(total_result) > 0:
+                score = total_result[0][1]
+                question = total_result[0][0].metadata["question"]
+                if self.cos_sim_threshold_min + score <= 1:
+                    answers.append("我猜你是想问这个问题吧。({})".format(question))
         return answers
 
     def get_faq(self, question) -> Reply:

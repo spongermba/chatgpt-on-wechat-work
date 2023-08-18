@@ -13,7 +13,7 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.docstore.document import Document
 
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
 else:
@@ -173,7 +173,12 @@ def generate_embedding_from_csv_file_chroma(file):
     print(add_value)
     result = chroma.similarity_search_with_score("什么是提前面试？提前面试有啥作用")
     print(result)
-
+ #chain test
+from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
+from langchain.prompts.few_shot import FewShotPromptTemplate
+from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+import json
 def generate_relevant_queries(question:str)->list:
     queries_input = f"""
     生成一系列跟此问题相关的问题。这些问题应该是一些你认为用户可能会从不同角度提出的同一个问题。
@@ -184,12 +189,6 @@ def generate_relevant_queries(question:str)->list:
 
     Format: {{"queries": ["query_1", "query_2", "query_3"]}}
     """
-    #chain test
-    from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
-    from langchain.prompts.few_shot import FewShotPromptTemplate
-    from langchain.llms import OpenAI
-    from langchain.chat_models import ChatOpenAI
-    import json
 
     example = [{"query":"清华是不是很看重学历？", 
                 "similar_keywords":["学历", "背景"],
@@ -310,6 +309,54 @@ def langchain_long_text_summary(file_path:str):
     result = chain.run(split_docs)
     print(result)
 
+from langchain.document_loaders import TextLoader
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import QAGenerationChain
+def generate_qustion():
+    loader = TextLoader(os.path.join(os.path.dirname(__file__), "qa_test.txt"), encoding="utf-8")
+    print("doc length:{}".format(len(loader.load())))
+    doc = loader.load()[0]
+    print("doc page content:{}".format(doc.page_content))
+    prompt = PromptTemplate.from_template("生成的问题跟答案只能用简体中文，并且不能出现文中已经有的问题")
+    chain = QAGenerationChain.from_llm(ChatOpenAI(model_name="gpt-3.5-turbo-16k-0613", temperature=0.0))
+    qa = chain.run(doc.page_content)
+    #print all qa list
+    for i in range(0, len(qa)):
+        print(qa[i])
+
+from langchain.chains import LLMChain
+from langchain.evaluation.qa import QAEvalChain
+def evalution_qa():
+    prompt = PromptTemplate(template="Question: {question}\nAnswer:", input_variables=["question"])
+    llm = OpenAI(model_name="text-davinci-003", temperature=0)
+    chain = LLMChain(llm=llm, prompt=prompt)
+    examples = [
+    {
+        "question": "Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now?",
+        "answer": "11"
+    },
+    {
+        "question": 'Is the following sentence plausible? "Joao Moutinho caught the screen pass in the NFC championship."',
+        "answer": "No"
+    }]
+
+    predictions = chain.apply(examples)
+    print(predictions)
+
+    eval_chain = QAEvalChain.from_llm(OpenAI(temperature=0.0))
+    graded_outputs = eval_chain.evaluate(examples, predictions, question_key="question", prediction_key="text")
+
+    for i, eg in enumerate(examples):
+        print(f"Example {i}:")
+        print("Question: " + eg['question'])
+        print("Real Answer: " + eg['answer'])
+        print("Predicted Answer: " + predictions[i]['text'])
+        print("Predicted Grade: " + graded_outputs[i]['text'])
+        print()
+ 
+ 
+ 
+
 #write termal command to test
 if __name__ == "__main__":
     print("test")
@@ -332,6 +379,8 @@ if __name__ == "__main__":
         print("6. langchain long text summary")
         print("7. get answer from chroma")
         print("8. generate chroma from csv file")
+        print("9. generate question answer pair from txt file")
+        print("10. evalution qa")
         option = input("option: ")
         if option == "1":
             generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
@@ -386,6 +435,10 @@ json format:{'story':{'english': 'story in english', 'chinese': 'story in simpli
             print(answers)
         elif option == "8":
             generate_embedding_from_csv_file_chroma(os.path.join(curdir, "beijingzexiao_v1.csv"))
+        elif option == "9":
+            generate_qustion()
+        elif option == "10":
+            evalution_qa()
         else:
             print("invalid option")
 

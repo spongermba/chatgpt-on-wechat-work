@@ -1,5 +1,5 @@
 {
-  "open_ai_api_key": "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",
+  "open_ai_api_key": "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",
   "model": "gpt-4-0613",
   "proxy": "",
   "single_chat_prefix": [
@@ -36,7 +36,7 @@
   "conversation_max_tokens": 8000,
   "expires_in_seconds": 3600,
   "character_desc": "你是一名MBA面试指导老师，有着丰富的院校知识跟面试经验，需要解答学生关于择校，面试相关的问题，帮助他们找到合适的院校并顺利通过面试",
-  "subscribe_msg": "我是你的MBA面试指导老师，有什么问题都可以问我哦~",
+  "subscribe_msg": "我是你的MBA面试指导老师，面试相关的问题都可以问我哦~",
   "use_linkai": false,
   "linkai_api_key": "",
   "linkai_app_code": "",
