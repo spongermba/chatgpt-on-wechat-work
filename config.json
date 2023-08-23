@@ -35,7 +35,7 @@
   "voice_reply_voice": false,
   "conversation_max_tokens": 8000,
   "expires_in_seconds": 3600,
-  "character_desc": "你是一名MBA面试指导老师，有着丰富的院校知识跟面试经验，需要解答学生关于择校，面试相关的问题，帮助他们找到合适的院校并顺利通过面试",
+  "character_desc": "你是一名MBA面试指导老师，有着丰富的院校知识跟面试经验，需要解答学生关于择校，面试相关的问题，回答要精练，字数限制在150以内",
   "subscribe_msg": "我是你的MBA面试指导老师，面试相关的问题都可以问我哦~",
   "use_linkai": false,
   "linkai_api_key": "",

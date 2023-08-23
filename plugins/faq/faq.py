@@ -384,6 +384,7 @@ class FAQ(Plugin):
             json_output = json.loads(content_str)
         except json.JSONDecodeError as e:
             logger.error("[FAQ] json decode error: {}".format(e))
+            return {}
         logger.debug("[FAQ] relevant question: {}".format(json_output))
         return  json_output
     
