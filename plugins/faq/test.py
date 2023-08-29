@@ -13,11 +13,11 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.docstore.document import Document
 
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
 else:
-    CHROMA_DB_DIR = "/vectordb/chroma_db/"
+    CHROMA_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectordb/chroma_db")
 CHROMA_COLLECTION_NAME = "sponger_bot"
 SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 
@@ -161,18 +161,21 @@ def generate_embedding_from_csv_file_chroma(file):
     for i in range(0, df.shape[0]):
         question = str(df.iloc[i, 0]).strip()
         answer = str(df.iloc[i, 1]).strip()
-        if len(question) == 0 or len(answer) == 0:
-            continue
-        dict = {"question": question, "answer": answer}
-        meta_datas.append(dict)
-        texts.append(question)
+        #将question利用split分成多个句子
+        question_list = question.split("；")
+        for j in range(0, len(question_list)):
+            question = question_list[j]
+            if len(question) == 0 or len(answer) == 0 or question == "nan" or answer == "nan":
+                continue
+            dict = {"question": question, "answer": answer}
+            meta_datas.append(dict)
+            texts.append(question)
+            print(dict)
     
     embedding = OpenAIEmbeddings()
     chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
-    add_value = chroma.add_texts(texts, meta_datas)
-    print(add_value)
-    result = chroma.similarity_search_with_score("什么是提前面试？提前面试有啥作用")
-    print(result)
+    if len(texts) > 0:
+        chroma.add_texts(texts, meta_datas)
  #chain test
 from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
 from langchain.prompts.few_shot import FewShotPromptTemplate
@@ -251,9 +254,6 @@ def generate_relevant_queries(question:str)->list:
     except json.JSONDecodeError as e:
         print("json decode error: {}".format(e))
     return  json_output
-
-    queries = helper.json_gpt(queries_input)
-    return queries["queries"]
 
 import math
 def load_similar_keywords()->list:
@@ -359,7 +359,6 @@ def evalution_qa():
 
 #write termal command to test
 if __name__ == "__main__":
-    print("test")
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
     openai.api_key = OPENAI_API_KEY
     curdir = os.path.dirname(__file__)
@@ -434,7 +433,8 @@ json format:{'story':{'english': 'story in english', 'chinese': 'story in simpli
             answers = get_answer_from_chroma(question, 4)
             print(answers)
         elif option == "8":
-            generate_embedding_from_csv_file_chroma(os.path.join(curdir, "beijingzexiao_v1.csv"))
+            generate_embedding_from_csv_file_chroma(os.path.join(curdir, "beijingrenda_v3.csv"))
+            break
         elif option == "9":
             generate_qustion()
         elif option == "10":

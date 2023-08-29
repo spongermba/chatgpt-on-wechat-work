@@ -1,13 +1,13 @@
 import json
 import time
 import openai
-#import config
-import openai.embeddings_utils as em_utils
-from openai.embeddings_utils import get_embedding, cosine_similarity
 
 OPEN_AI_MODEL3 = "gpt-3.5-turbo"
 OPEN_AI_MODEL4 = "gpt-4"
 DEFAULT_RETRY_COUNT = 3
+BAIDU_API_KEY     = ""
+BAIDU_SECRET_KEY  = ""
+BAIDU_BASE_URL    = "https://aip.baidubce.com/oauth/2.0/token"
 #write a function 请求openai chatcomplition ，只返回正确的json
 def json_gpt(input:str)->json:
     completion = openai.ChatCompletion.create(
@@ -60,3 +60,14 @@ def touch_up_the_text(input:str, retry_count)->str:
             return touch_up_the_text(input, retry_count)
         else:
             return ''
+# def ocr(url:str)->str:
+#     pass
+
+# def get_baidu_access_token():
+#     """
+#     使用 AK，SK 生成鉴权签名（Access Token）
+#     :return: access_token，或是None(如果错误)
+#     """
+#     url = "https://aip.baidubce.com/oauth/2.0/token"
+#     params = {"grant_type": "client_credentials", "client_id": BAIDU_API_KEY, "client_secret": BAIDU_SECRET_KEY}
+#     return str(requests.post(BAIDU_BASE_URL, params=params).json().get("access_token"))

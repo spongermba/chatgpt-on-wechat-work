@@ -30,9 +30,9 @@ from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 
 if sys.platform == 'win32':
-    CHROMA_DB_DIR = ".\\vectordb\\chroma_db\\"
+    CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
 else:
-    CHROMA_DB_DIR = "/vectordb/chroma_db/"
+    CHROMA_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectordb/chroma_db")
 CHROMA_COLLECTION_NAME = "sponger_bot"
 SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 
@@ -260,11 +260,15 @@ class FAQ(Plugin):
         for i in range(0, df.shape[0]):
             question = str(df.iloc[i, 0]).strip()
             answer = str(df.iloc[i, 1]).strip()
-            if len(question) == 0 or len(answer) == 0:
-                continue
-            dict = {"question": question, "answer": answer}
-            meta_datas.append(dict)
-            texts.append(question)
+            #将question利用split分成多个句子
+            question_list = question.split("；")
+            for j in range(0, len(question_list)):
+                question = question_list[j]
+                if len(question) == 0 or len(answer) == 0 or question == "nan" or answer == "nan":
+                    continue
+                dict = {"question": question, "answer": answer}
+                meta_datas.append(dict)
+                texts.append(question)
         
         embedding = OpenAIEmbeddings()
         chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
@@ -354,17 +358,17 @@ class FAQ(Plugin):
         )
         few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
                                                           example_prompt=example_prompt)
-        similar_keywords = [["清华大学", "清华"], 
-                            ["北京大学", "北大"],
-                            ["光华管理学院", "光华管院", "光华"],
-                            ["人民大学", "人大"], 
-                            ["提面", "提前面试", "提前面"],
-                            ["北京师范大学", "北师大", "北师"],
-                            ["非全日制", "非全"],
-                            ["北京理工", "北理"]]
+        # similar_keywords = [["清华大学", "清华"], 
+        #                     ["北京大学", "北大"],
+        #                     ["光华管理学院", "光华管院", "光华"],
+        #                     ["人民大学", "人大"], 
+        #                     ["提面", "提前面试", "提前面"],
+        #                     ["北京师范大学", "北师大", "北师"],
+        #                     ["非全日制", "非全"],
+        #                     ["北京理工", "北理"]]
         sys_prompt = f"""
         你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
-        第一步，根据每一组相似关键词列表所有可能进行排列组合替换{similar_keywords}；
+        第一步，根据每一组相似关键词列表所有可能进行排列组合替换{self.similar_keywords}；
         第二步，根据替换完成的问题，生成可能的不同角度的相似问题；
         第三步，根据生成的相似问题，生成最终的相似问题列表。
         """
