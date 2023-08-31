@@ -74,30 +74,34 @@ def get_answer_from_chroma(question, topk=1) ->list:
         print("db is None")
         return []
     
-    result = db.similarity_search_with_score(question, k=topk)
+    result = db.similarity_search_with_relevance_scores(question, k=topk)
     answers = []
     for i in range(0, len(result)):
-        meta_question = result[i][0].metadata["question"]
-        answer = result[i][0].metadata["answer"]
+        meta_data = result[i][0].metadata
+        #如果meta_data没有数据，说明不是faq的qa对
+        if len(meta_data) <= 0:
+            continue
+        meta_question = meta_data["question"]
+        answer = meta_data["answer"]
         score = result[i][1]
         print("score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
-        if 1-score > 0.93:
+        if score > 0.93:
             answers.append(answer)
     #如果 answer列表为空，生成相似问题，从相似问题中查找是否有满足阈值的答案
     if len(answers) <= 0:
         rel_questions = generate_relevant_queries(question)
         total_result = []
         for i in range(0, len(rel_questions)):
-            result = db.similarity_search_with_score(rel_questions[i], k=topk)
+            result = db.similarity_search_with_relevance_scores(rel_questions[i], k=topk)
             total_result.extend(result)
         #根据score对total_result进行排序
-        sorted_result = sorted(total_result, key=lambda x: x[1])
+        sorted_result = sorted(total_result, key=lambda x: x[1], reverse=True)
         #遍历total_result，如果score大于0.9，将answer加入到answers中
         for i in range(0, len(sorted_result)):
             meta_question = sorted_result[i][0].metadata["question"]
             score = sorted_result[i][1]
             print("score: {}, meta_question: {}".format(score, meta_question))
-            if 1-score > 0.88:
+            if score > 0.88:
                 answers.append(sorted_result[i][0].metadata["answer"])
     return answers
 
@@ -176,6 +180,22 @@ def generate_embedding_from_csv_file_chroma(file):
     chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
     if len(texts) > 0:
         chroma.add_texts(texts, meta_datas)
+
+def load_affirmations(file) -> list:
+    curdir = os.path.dirname(__file__)
+    affirmations_path = os.path.join(curdir, file)
+    with open(affirmations_path, "r", encoding="utf-8") as f:
+        affirmations = []
+        for line in f:
+            affirmation = line.strip()
+            if affirmation:
+                affirmations.append(affirmation)
+    return affirmations
+def generate_embedding_from_txt_file_chroma(file):
+    affirmations = load_affirmations(file)
+    embedding = OpenAIEmbeddings()
+    chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
+    chroma.add_texts(affirmations, meta_datas=None)
  #chain test
 from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
 from langchain.prompts.few_shot import FewShotPromptTemplate
@@ -253,6 +273,7 @@ def generate_relevant_queries(question:str)->list:
         json_output = json.loads(content_str)
     except json.JSONDecodeError as e:
         print("json decode error: {}".format(e))
+        return {}
     return  json_output
 
 import math
@@ -379,7 +400,8 @@ if __name__ == "__main__":
         print("7. get answer from chroma")
         print("8. generate chroma from csv file")
         print("9. generate question answer pair from txt file")
-        print("10. evalution qa")
+        print("10. generate chroma from txt file")
+        print("11. evalution qa")
         option = input("option: ")
         if option == "1":
             generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
@@ -438,6 +460,8 @@ json format:{'story':{'english': 'story in english', 'chinese': 'story in simpli
         elif option == "9":
             generate_qustion()
         elif option == "10":
+            generate_embedding_from_txt_file_chroma("affirmations.txt")
+        elif option == "11":
             evalution_qa()
         else:
             print("invalid option")

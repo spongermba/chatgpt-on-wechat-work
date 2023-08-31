@@ -48,11 +48,17 @@ SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 class FAQ(Plugin):
     def load_faq_from_embedding_file(self, file) -> list:
         pass
+    def load_affirmations(self, file) -> list:
+        pass
+    def load_similar_keywords(self, file):
+        pass
     def get_answer_from_openai(self, question) -> list:
         pass
     def generate_embedding_from_csv_file(self, file):
         pass
     def generate_embedding_from_csv_file_chroma(self, file):
+        pass
+    def generate_embedding_from_txt_file_chroma(self, file):
         pass
     def get_chatgpt_style_sim(self, quary, question, retry_count=0) -> json:
         pass
@@ -60,9 +66,9 @@ class FAQ(Plugin):
         pass
     def generate_relevant_queries_langchain(self, question)->list:
         pass
-    def get_answer_from_chroma(self, question, topk=1) ->list:
+    def get_answer_from_chroma(self, session_id, question, topk=1) ->list:
         pass
-    def load_similar_keywords(self, file):
+    def get_faq(self, session_id, question) -> Reply:
         pass
 
     def __init__(self):
@@ -88,6 +94,8 @@ class FAQ(Plugin):
             self.cos_sim_threshold_mid = conf["cos_sim_threshold_mid"]
             self.cos_sim_threshold_min = conf["cos_sim_threshold_min"]
             self.similar_keywords = []
+            #{"session_id": "question"}
+            self.previous_not_hit_questions = {}
             self.load_similar_keywords(os.path.join(curdir, SIMILAR_KEYWORDS_FILE))
             # load faq
             #self.qa_list = self.load_faq_from_embedding_file(os.path.join(curdir, "qa_embedding.csv"))
@@ -99,6 +107,18 @@ class FAQ(Plugin):
         except Exception as e:
             logger.warn("[FAQ] init failed")
             raise e
+    def load_affirmations(self, file) -> list:
+        curdir = os.path.dirname(__file__)
+        affirmations_path = os.path.join(curdir, file)
+        with open(affirmations_path, "r", encoding="utf-8") as f:
+            affirmations = []
+            for line in f:
+                affirmation = line.strip()
+                if affirmation:
+                    affirmations.append(affirmation)
+        logger.info("[FAQ] affirmations loaded. affirmations size: %d" % len(self.affirmations))
+        return affirmations
+
     def is_valid_json_string(self, s):
         try:
             json.loads(s)
@@ -112,7 +132,8 @@ class FAQ(Plugin):
 
         content = e_context["context"].content
         logger.debug("[FAQ] on_handle_context. content: %s" % content)
-        reply = self.get_faq(content)
+        session_id = e_context["context"]["session_id"]
+        reply = self.get_faq(session_id, content)
         if reply:
             logger.debug("[FAQ] FAQ reply= %s", reply)
             e_context["reply"] = reply
@@ -130,7 +151,6 @@ class FAQ(Plugin):
             logger.debug("[FAQ] FAQ reply is None, request gpt")
             e_context.action = EventAction.BREAK
         
-    
     def load_faq_from_embedding_file(self, file) -> list:
         #if file not exist, use gererate_faq_embedding.py to generate
         if not os.path.exists(file):
@@ -174,23 +194,36 @@ class FAQ(Plugin):
                         break
         return answer
     
-    def get_answer_from_chroma(self, question, topk=1) ->list:
+    def get_answer_from_chroma(self, session_id, question, topk=1) ->list:
         embedding = OpenAIEmbeddings()
         db = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
         if db is None:
             logger.error("[FAQ] chroma db is None")
             return []
         
-        ori_result = db.similarity_search_with_score(question, k=topk)
+        
+        ori_result = db.similarity_search_with_relevance_scores(question, k=topk)
         #logger.debug("[FAQ] question sim result: {}".format(ori_result))
         answers = []
         for i in range(0, len(ori_result)):
-            meta_question = ori_result[i][0].metadata["question"]
-            answer = ori_result[i][0].metadata["answer"]
+            meta_data = ori_result[i][0].metadata
             score = ori_result[i][1]
-            logger.debug("[FAQ] origin score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
-            if self.cos_sim_threshold_max + score <= 1:
-                answers.append(answer)
+            #如果meta_data没有数据，说明不是faq的qa对
+            if len(meta_data) <= 0:
+                if self.cos_sim_threshold_max <= score :
+                    pre_question = self.previous_not_hit_questions.get(session_id)
+                    if pre_question is None:
+                        continue
+                    #递归召回
+                    logger.debug("[FAQ] recursive call get_answer_from_chroma. session_id: {}, pre_question: {}".format(session_id, pre_question))
+                    self.previous_not_hit_questions.pop(session_id)
+                    return self.get_answer_from_chroma(session_id, pre_question, topk=1)
+            else:
+                meta_question = meta_data["question"]
+                answer = meta_data["answer"]
+                logger.debug("[FAQ] origin score: {}, question: {}, meta_question: {}".format(score, question, meta_question))
+                if self.cos_sim_threshold_max <= score:
+                    answers.append(answer)
         #如果 answer列表为空，生成相似问题，从相似问题中查找是否有满足阈值的答案
         if len(answers) <= 0:
             total_result = []
@@ -198,30 +231,31 @@ class FAQ(Plugin):
             total_result.extend(ori_result)
             rele_questions = self.generate_relevant_queries_langchain(question)
             for i in range(0, len(rele_questions)):
-                result = db.similarity_search_with_score(rele_questions[i], k=topk)
+                result = db.similarity_search_with_relevance_scores(rele_questions[i], k=topk)
                 #logger.debug("[FAQ] relevant question result: {}".format(result))
                 total_result.extend(result)
             #根据score对total_result进行排序
-            sorted_result = sorted(total_result, key=lambda x: x[1])
-            #遍历total_result，如果score大于0.9，将answer加入到answers中
+            sorted_result = sorted(total_result, key=lambda x: x[1], reverse=True)
             for i in range(0, len(sorted_result)):
                 meta_question = sorted_result[i][0].metadata["question"]
                 score = sorted_result[i][1]
                 logger.debug("[FAQ] relevant score: {}, meta_question: {}".format(score, meta_question))
-                if self.cos_sim_threshold_mid + score <= 1:
+                if self.cos_sim_threshold_mid <= score:
                     answers.append(sorted_result[i][0].metadata["answer"])
-            #如果依赖没有召回答案，找到最接近的问题，提示用户是否在找这个问题
+            #如果依然没有召回答案，找到最接近的问题，提示用户是否在找这个问题
             if len(answers) <= 0 and len(total_result) > 0:
                 score = total_result[0][1]
                 question = total_result[0][0].metadata["question"]
-                if self.cos_sim_threshold_min + score <= 1:
+                if self.cos_sim_threshold_min <= score:
                     answers.append("我猜你是想问这个问题吧。({})".format(question))
+                    self.previous_not_hit_questions[session_id] = question
+                    logger.debug("[FAQ] insert previous_not_hit_questions. session_id: {}, question: {}".format(session_id, question))
         return answers
 
-    def get_faq(self, question) -> Reply:
+    def get_faq(self, session_id, question) -> Reply:
         #get answer
         #answer = self.get_answer_from_embedding(question, self.qa_list, topk=1)
-        answer = self.get_answer_from_chroma(question, topk=1)
+        answer = self.get_answer_from_chroma(session_id, question, topk=1)
         #return reply
         if len(answer) > 0:
             return Reply(content=answer[0], type=ReplyType.TEXT)
@@ -273,6 +307,12 @@ class FAQ(Plugin):
         embedding = OpenAIEmbeddings()
         chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
         chroma.add_texts(texts, meta_datas)
+
+    def generate_embedding_from_txt_file_chroma(self, file):
+        affirmations = self.load_affirmations(file)
+        embedding = OpenAIEmbeddings()
+        chroma = Chroma(CHROMA_COLLECTION_NAME, embedding, persist_directory=CHROMA_DB_DIR)
+        chroma.add_texts(affirmations, meta_datas=None)
 
     def get_answer_from_openai(self, question) ->str:
         #get answer from openai chatcomplition
