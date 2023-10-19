@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import openai
 import openai.embeddings_utils as em_utils
-from openai.embeddings_utils import get_embedding, cosine_similarity
+from openai.embeddings_utils import get_embedding
 
 import plugins
 from bridge.bridge import Bridge
@@ -18,9 +18,8 @@ from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 import config
-from .helper import json_gpt, touch_up_the_text
 from plugins import *
-
+from plugins.faq.helper import json_gpt, touch_up_the_text, remove_no_chinese
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.docstore.document import Document
@@ -29,12 +28,15 @@ from langchain.prompts.few_shot import FewShotPromptTemplate
 from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 
+#from banwords.lib.WordsSearch import WordsSearch
+
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
 else:
     CHROMA_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectordb/chroma_db")
 CHROMA_COLLECTION_NAME = "sponger_bot"
 SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
+SELECT_SCHOOL_PROMPT_FILE = "select_school_prompt.xlsx"
 
 @plugins.register(
     name="FAQ",
@@ -51,6 +53,10 @@ class FAQ(Plugin):
     def load_affirmations(self, file) -> list:
         pass
     def load_similar_keywords(self, file):
+        pass
+    def load_select_school_prompt(self, file_path: str) -> list:
+        pass
+    def get_university_full_name(self, name: str) -> str:
         pass
     def get_answer_from_openai(self, question) -> list:
         pass
@@ -69,6 +75,8 @@ class FAQ(Plugin):
     def get_answer_from_chroma(self, session_id, question, topk=1) ->list:
         pass
     def get_faq(self, session_id, question) -> Reply:
+        pass
+    def get_university_match_result(self, university: str, user_info: str) -> Reply:
         pass
 
     def __init__(self):
@@ -94,12 +102,10 @@ class FAQ(Plugin):
             self.cos_sim_threshold_mid = conf["cos_sim_threshold_mid"]
             self.cos_sim_threshold_min = conf["cos_sim_threshold_min"]
             self.similar_keywords = []
-            #{"session_id": "question"}
             self.previous_not_hit_questions = {}
+            self.prompt_list = []
             self.load_similar_keywords(os.path.join(curdir, SIMILAR_KEYWORDS_FILE))
-            # load faq
-            #self.qa_list = self.load_faq_from_embedding_file(os.path.join(curdir, "qa_embedding.csv"))
-            #logger.info("[FAQ] faq loaded. qa_list size: %d" % len(self.qa_list))
+            self.load_select_school_prompt(os.path.join(curdir, SELECT_SCHOOL_PROMPT_FILE))
 
             # register event handler
             self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
@@ -132,25 +138,49 @@ class FAQ(Plugin):
 
         content = e_context["context"].content
         logger.debug("[FAQ] on_handle_context. content: %s" % content)
-        session_id = e_context["context"]["session_id"]
-        reply = self.get_faq(session_id, content)
-        if reply:
-            logger.debug("[FAQ] FAQ reply= %s", reply)
-            e_context["reply"] = reply
-            # if need context, break the event, and wait for next context
-            # if not need context, break pass the event, and continue to handle context
-            # normally, we should not break pass the event, otherwise, the context will be missed
-            session_id = e_context["context"]["session_id"]
-            bot = Bridge().get_bot("chat")
-            session = bot.sessions.build_session(session_id)
-            session.add_query(content)
-            session.add_reply(reply.content)
-            logger.debug("[FAQ] session messages: {}".format(session.messages))
-            e_context.action = EventAction.BREAK_PASS
+        # 特殊的择校指令，走择校流程
+        if content.startswith("*"):
+            if len(content) > 1:
+                content = content[1:]
+                results = content.split(" ", 1)
+                if len(results) < 2:
+                    e_context["reply"] = Reply(content="请按照格式输入：*学校名称 用户背景信息，或者 *择校 用户背景信息", type=ReplyType.TEXT)
+                    e_context.action = EventAction.BREAK_PASS
+                    return
+                
+                university = results[0]
+                user_info = results[1]
+                # 通用择校指令，根据用户背景信息，返回匹配的学校
+                if university == "择校":
+                    e_context["reply"] = Reply(content="开发中...", type=ReplyType.TEXT)
+                    e_context.action = EventAction.BREAK_PASS
+                # 指定学校择校指令，根据用户背景信息，返回期望院校的匹配结果
+                else:
+                    e_context["reply"] = self.get_university_match_result(university, user_info)
+                    e_context.action = EventAction.BREAK_PASS
+                logger.debug("[FAQ] university: {}, user_info: {}".format(university, user_info))
+            else:
+                return
         else:
-            logger.debug("[FAQ] FAQ reply is None, request gpt")
-            e_context.action = EventAction.BREAK
-        
+            session_id = e_context["context"]["session_id"]
+            reply = self.get_faq(session_id, content)
+            if reply:
+                logger.debug("[FAQ] FAQ reply= %s", reply)
+                e_context["reply"] = reply
+                # if need context, break the event, and wait for next context
+                # if not need context, break pass the event, and continue to handle context
+                # normally, we should not break pass the event, otherwise, the context will be missed
+                session_id = e_context["context"]["session_id"]
+                bot = Bridge().get_bot("chat")
+                session = bot.sessions.build_session(session_id)
+                session.add_query(content)
+                session.add_reply(reply.content)
+                logger.debug("[FAQ] session messages: {}".format(session.messages))
+                e_context.action = EventAction.BREAK_PASS
+            else:
+                logger.debug("[FAQ] FAQ reply is None, request gpt")
+                e_context.action = EventAction.BREAK
+
     def load_faq_from_embedding_file(self, file) -> list:
         #if file not exist, use gererate_faq_embedding.py to generate
         if not os.path.exists(file):
@@ -166,7 +196,12 @@ class FAQ(Plugin):
             dict = {"question": q, "answer": a, "emb": emb}
             vec.append(dict)
         return vec
-    
+    def get_university_full_name(self, name: str) -> str:
+        name = remove_no_chinese(name)
+        for names in self.similar_keywords:
+            if name in names:
+                return names[0]
+        return "" 
     def get_answer_from_embedding(self, question, qa_list, topk=1) ->list:
         #get embedding of question
         emb = em_utils.get_embedding(question, engine=self.embedding_model)
@@ -392,20 +427,19 @@ class FAQ(Plugin):
                                         "人大提前面试考什么？",
                                         "人民大学提前面试考哪些？",
                                         "人大提前面试会问些什么问题？",
-                                        "人大提前面试会问些什么问题？"]},    ]
+                                        "人大提前面试会问些什么问题？"]},
+                    {"query":"法大报考条件是什么？",
+                     "similar_queries": ["中国政法大学提面条件是什么？",
+                                         "中政提面条件是什么？",
+                                         "中法大提面条件是什么？",
+                                         "中国政法大学的提面要求有哪些？",
+                                         "中政的提面标准是什么？",
+                                         "中法大的提面条件具体包括哪些？"]}]
         example_prompt = ChatPromptTemplate.from_messages(
                 [('human', '{query}'), ('ai', '{similar_queries}')]
         )
         few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
                                                           example_prompt=example_prompt)
-        # similar_keywords = [["清华大学", "清华"], 
-        #                     ["北京大学", "北大"],
-        #                     ["光华管理学院", "光华管院", "光华"],
-        #                     ["人民大学", "人大"], 
-        #                     ["提面", "提前面试", "提前面"],
-        #                     ["北京师范大学", "北师大", "北师"],
-        #                     ["非全日制", "非全"],
-        #                     ["北京理工", "北理"]]
         sys_prompt = f"""
         你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
         第一步，根据每一组相似关键词列表所有可能进行排列组合替换{self.similar_keywords}；
@@ -420,7 +454,6 @@ class FAQ(Plugin):
             ]
         )
         final_prompt.format(query=question)
-        print(final_prompt)
         chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
         output = chain.invoke({"query": question})
         content_str = output.content.replace("'", '"')
@@ -441,6 +474,67 @@ class FAQ(Plugin):
                         if (isinstance(x, str) and x != "") 
                         or (isinstance(x, float) and not math.isnan(x))]
             self.similar_keywords.append(keywords)
+    
+    def load_select_school_prompt(self, file_path: str):
+        df = pd.read_excel(file_path)
+        last_university = ""
+        for i in range(0, df.shape[0]):
+            university = df.iloc[i, 0]
+            prompt = df.iloc[i, 1]
+            few_shot_question = df.iloc[i]["few_shot_question"]
+            few_shot_answer = df.iloc[i]["few_shot_answer"]
+            if isinstance(university, str) and len(university) > 0:
+                last_university = university
+                entry = {
+                    "university": university,
+                    "prompt": prompt,
+                    "few_shot_list": [
+                        {
+                            "question": few_shot_question,
+                            "answer": few_shot_answer
+                        }
+                    ]
+                }     
+                self.prompt_list.append(entry)
+            else:
+                existing_university = next((item for item in self.prompt_list if item["university"] == last_university), None)
+                if existing_university is not None:
+                    existing_university["few_shot_list"].append({
+                        "question": few_shot_question,
+                        "answer": few_shot_answer
+                    })
+    
+    def get_university_match_result(self, university: str, user_info: str) -> Reply:
+        few_shot_list = []
+        for i in range(0, len(self.prompt_list)):
+            full_name = self.get_university_full_name(university)
+            if len(full_name) <= 0:
+                logger.debug("[FAQ] not found university: {}".format(university))
+                return Reply(content="还没有这个院校的择校规则信息，因此无法提供该院校的择校服务", type=ReplyType.TEXT)
+            if full_name == self.prompt_list[i]["university"]:
+                prompt = self.prompt_list[i]["prompt"]
+                few_shot_list = self.prompt_list[i]["few_shot_list"]
+                break
+        if len(few_shot_list) <= 0:
+            return Reply(content="该院校没有配置few shots", type=ReplyType.TEXT)
+        
+        example_prompt = ChatPromptTemplate.from_messages(
+                [('human', '{question}'), ('ai', '{answer}')]
+        )
+        few_shot_prompt = FewShotChatMessagePromptTemplate(examples=few_shot_list,
+                                                          example_prompt=example_prompt)
+        sys_prompt = f"{prompt}\n{user_info}"
+        final_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", sys_prompt),
+                few_shot_prompt,
+                ("human", "{question}"),
+            ]
+        )
+        final_prompt.format(question=user_info)
+        chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+        output = chain.invoke({"question": user_info})
+        return Reply(content=output.content, type=ReplyType.TEXT)
     
 #write a terminal command to test
 if __name__ == "__main__":

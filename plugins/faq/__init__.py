@@ -1,2 +1,2 @@
-from .helper import*
 from .faq import*
+from .test import*

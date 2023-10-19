@@ -1,3 +1,4 @@
+import re
 import json
 import time
 import openai
@@ -60,6 +61,9 @@ def touch_up_the_text(input:str, retry_count)->str:
             return touch_up_the_text(input, retry_count)
         else:
             return ''
+def remove_no_chinese(text: str) -> str:
+    pattern = re.compile(r'[^\u4e00-\u9fa5]')
+    return re.sub(pattern, '', text)    
 # def ocr(url:str)->str:
 #     pass
 
@@ -71,3 +75,7 @@ def touch_up_the_text(input:str, retry_count)->str:
 #     url = "https://aip.baidubce.com/oauth/2.0/token"
 #     params = {"grant_type": "client_credentials", "client_id": BAIDU_API_KEY, "client_secret": BAIDU_SECRET_KEY}
 #     return str(requests.post(BAIDU_BASE_URL, params=params).json().get("access_token"))
+
+#加一段测试代码
+if __name__ == "__main__":
+    print(remove_no_chinese("你好"))

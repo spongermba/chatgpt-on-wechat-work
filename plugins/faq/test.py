@@ -2,7 +2,6 @@ import os
 import sys
 import ast
 import time
-import helper
 import pandas as pd
 import numpy as np
 import openai
@@ -11,9 +10,10 @@ from openai.embeddings_utils import get_embedding, cosine_similarity
 
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
-from langchain.docstore.document import Document
 
-OPENAI_API_KEY = "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"
+from helper import json_gpt, touch_up_the_text, remove_no_chinese
+
+OPENAI_API_KEY = "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"
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
 else:
@@ -145,7 +145,7 @@ def generate_embedding_from_csv_file(file):
             continue
        
        emb = get_embedding(question, engine="text-embedding-ada-002")
-       touched_answer = helper.touch_up_the_text(answer, 0)
+       touched_answer = touch_up_the_text(answer, 0)
        if len(touched_answer) == 0:
            touched_answer = answer
        print("[FAQ] answer: {}, touched_answer: {}".format(answer, touched_answer))
@@ -203,16 +203,6 @@ from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 import json
 def generate_relevant_queries(question:str)->list:
-    queries_input = f"""
-    生成一系列跟此问题相关的问题。这些问题应该是一些你认为用户可能会从不同角度提出的同一个问题。
-    在问题中使用关键词的变体，尽可能的概括，包括你能想到的尽可能多的提问。
-    比如, 包含的查询就想这样 ['keyword_1 keyword_2', 'keyword_1', 'keyword_2']
-
-    User question: {question}
-
-    Format: {{"queries": ["query_1", "query_2", "query_3"]}}
-    """
-
     example = [{"query":"清华是不是很看重学历？", 
                 "similar_keywords":["学历", "背景"],
                 "similar_queries": ["清华大学对学历要求严格吗？", 
@@ -236,21 +226,21 @@ def generate_relevant_queries(question:str)->list:
                                     "人大mba提前面试一般在什么时间进行？",
                                     "人大mba提前批的录取标准是什么？",
                                     "人大mba预面试需要准备些什么？",
-                                    "请问人大mba提前复试的内容有哪些？"]},    ]
+                                    "请问人大mba提前复试的内容有哪些？"]},
+                    {"query":"法大报考条件是什么？",
+                     "similar_keywords": ['中国政法大学', '中政', '法大', '中法大'],
+                     "similar_queries": ["中国政法大学提面条件是什么？",
+                                         "中政提面条件是什么？",
+                                         "中法大提面条件是什么？",
+                                         "中国政法大学的提面要求有哪些？",
+                                         "中政的提面标准是什么？",
+                                         "中法大的提面条件具体包括哪些？"]}]
     example_prompt = ChatPromptTemplate.from_messages(
             [('human', '{query}'), ('ai', '{similar_queries}')]
     )
     few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
                                                       example_prompt=example_prompt)
-    # similar_keywords = [["清华大学", "清华"], 
-    #                     ["北京大学", "北大"],
-    #                     ["光华管理学院", "光华管院", "光华"],
-    #                     ["人民大学", "人大"], 
-    #                     ["提面", "提前面试", "提前面"],
-    #                     ["北京师范大学", "北师大", "北师"],
-    #                     ["非全日制", "非全"],
-    #                     ["北京理工", "北理"]]
-    
+
     sys_prompt = f"""
     你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
     第一步，根据每一组相似关键词列表所有可能进行排列组合替换{similar_keywords}；
@@ -374,9 +364,122 @@ def evalution_qa():
         print("Predicted Answer: " + predictions[i]['text'])
         print("Predicted Grade: " + graded_outputs[i]['text'])
         print()
+
+###作文批改 
+##段落结构
+#段落关联词
+def correct_paragraph_correlative() -> list:
+    #段落关联词
+    paragraph_correlative_words = ["首先", "其次", "最后", "总之", "总而言之", "总的来说", "总的说来", "总的来看", "总的来讲", "总的说", "总的来", "总的"]
+    example = [{"query":"清华是不是很看重学历？", 
+                "correlative_keywords":paragraph_correlative_words,
+                "similar_queries": ["清华大学对学历要求严格吗？", 
+                                    "清华对申请人的学历有什么具体要求？",
+                                    "在清华大学的招生中，学历是否是决定性因素之一？",
+                                    "清华大学录取时是否会对学历进行严格的筛选？",
+                                    "清华的招生政策是否存在对学历的硬性要求？",
+                                    "清华是不是很看重背景？",
+                                    "学历对于申请清华的影响有多大？",
+                                    "清华对于申请者背景会有什么要求？",
+                                    "学历在清华的招生评审中扮演着怎样的角色？",
+                                    "清华是不是很看重背景？"]}]
+    example_prompt = ChatPromptTemplate.from_messages(
+            [('human', '{query}'), ('ai', '{similar_queries}')]
+    )
+    few_shot_prompt = FewShotChatMessagePromptTemplate(examples=example,
+                                                      example_prompt=example_prompt)
+    sys_prompt = f"""
+    你是一个相似问题生成器，生成相似问题的时候，可以分步骤来做：
+    第一步，根据每一组相似关键词列表所有可能进行排列组合替换{similar_keywords}；
+    第二步，替换完成的问题，生成可能的不同角度的相似问题；
+    第三步，根据生成的相似问题，生成最终的相似问题列表。
+    """
+    final_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", sys_prompt),
+            few_shot_prompt,
+            ("human", "{query}"),
+        ]
+    )
+    final_prompt.format(query=question)
+    print(final_prompt)
+    chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+    output = chain.invoke({"query": question})
+    content_str = output.content.replace("'", '"')
+    try:
+        json_output = json.loads(content_str)
+    except json.JSONDecodeError as e:
+        print("json decode error: {}".format(e))
+        return {}
+    return  json_output
  
- 
- 
+ #标点符号
+def correct_article_punctuation():
+    pass
+
+#从excel文件中加载学校提示列表
+def load_select_school_prompt(file_path: str) -> list:
+    df = pd.read_excel(file_path)
+    prompt_list = []
+    last_university = ""
+    for i in range(0, df.shape[0]):
+        university = df.iloc[i, 0]
+        prompt = df.iloc[i, 1]
+        few_shot_question = df.iloc[i]["few_shot_question"]
+        few_shot_answer = df.iloc[i]["few_shot_answer"]
+        if isinstance(university, str) and len(university) > 0:
+            last_university = university
+            entry = {
+                "university": university,
+                "prompt": prompt,
+                "few_shot_list": [
+                    {
+                        "question": few_shot_question,
+                        "answer": few_shot_answer
+                    }
+                ]
+            }     
+            prompt_list.append(entry)
+        else:
+            existing_university = next((item for item in prompt_list if item["university"] == last_university), None)
+            if existing_university is not None:
+                existing_university["few_shot_list"].append({
+                    "question": few_shot_question,
+                    "answer": few_shot_answer
+                })
+        
+    return prompt_list
+
+def get_university_match_result(university: str, user_info: str) -> str:
+    university = remove_no_chinese(university)
+    prompt_list = load_select_school_prompt(os.path.join(curdir, "select_school_prompt.xlsx"))
+    for i in range(0, len(prompt_list)):
+        if university == prompt_list[i]["university"]:
+            prompt = prompt_list[i]["prompt"]
+            few_shot_list = prompt_list[i]["few_shot_list"]
+            break
+    if len(few_shot_list) <= 0:
+        return '还没有这个院校的择校规则信息，因此无法提供该院校的择校服务'
+    example_prompt = ChatPromptTemplate.from_messages(
+            [('human', '{question}'), ('ai', '{answer}')]
+    )
+    few_shot_prompt = FewShotChatMessagePromptTemplate(examples=few_shot_list,
+                                                      example_prompt=example_prompt)
+    sys_prompt = f"{prompt}\n{user_info}"
+    final_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", sys_prompt),
+            few_shot_prompt,
+            ("human", "{question}"),
+        ]
+    )
+    final_prompt.format(question=user_info)
+    chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+    output = chain.invoke({"question": user_info})
+    content_str = output.content.replace("'", '"')
+    print(content_str)
+    return content_str
+
 
 #write termal command to test
 if __name__ == "__main__":
@@ -402,6 +505,8 @@ if __name__ == "__main__":
         print("9. generate question answer pair from txt file")
         print("10. generate chroma from txt file")
         print("11. evalution qa")
+        print("12. select school from prompt")
+        print("13. exit")
         option = input("option: ")
         if option == "1":
             generate_embedding_from_csv_file(os.path.join(curdir, "qa_test.csv"))
@@ -440,7 +545,7 @@ if __name__ == "__main__":
 
                 prompt = """You as a story writer, I give you a set of words, you need to choose 10 words from them and generate an article on the topic of culture and art， keeping it to 200 words or less. The list of words is as follows：["divide", "preliminary", "expand", "interior", "process", "reside", "determine", "oppose", "rural", "arrange", "lodging", "broadcast", "project", "punctual", "wealth", "motive", "construct", "latitude", "explode", "imperative", "incidence", "dedicate", "commerce", "displace", "fuse", "impair", "boundary", "democratic", "persuade", "radical", "renovate", "undertake", "prohibit", "receipt", "topic", "delight", "illustrate", "economic", "allocate", "expose", "subtle", "emphasize", "aware", "strategy", "intermediate", "estimate", "genuine", "prevail", "nurture", "isolate", "configure", "represent", "clinic", "constrain", "orchestra", "rebel", "oblige", "disrupt", "withdraw", "contribution", "interpret", "amplitude", "mechanical", "divert", "pension", "dynamic", "appreciate", "ignite", "petrol", "wreck"]
 json format:{'story':{'english': 'story in english', 'chinese': 'story in simplified chinese', 'selected_words': ['word1', 'word2']}}"""
-                result = helper.json_gpt(prompt)
+                result = json_gpt(prompt)
                 print(result)
                 #休息一会
                 time.sleep(2)
@@ -451,18 +556,24 @@ json format:{'story':{'english': 'story in english', 'chinese': 'story in simpli
         elif option == "6":
             langchain_long_text_summary(os.path.join(curdir, "summary_test.pdf"))
         elif option == "7":
+            load_select_school_prompt(os.path.join(curdir, "select_school_prompt.xlsx"))
             question = input("question: ")
             answers = get_answer_from_chroma(question, 4)
             print(answers)
         elif option == "8":
-            generate_embedding_from_csv_file_chroma(os.path.join(curdir, "beijingrenda_v3.csv"))
-            break
+            generate_embedding_from_csv_file_chroma(os.path.join(os.path.join(curdir, "knowledge_base", "interview_services"), "merged.csv"))
         elif option == "9":
             generate_qustion()
         elif option == "10":
             generate_embedding_from_txt_file_chroma("affirmations.txt")
         elif option == "11":
             evalution_qa()
+        elif option == "12":
+            university = input("university: ")
+            user_info = input("user_info: ")
+            get_university_match_result(university, user_info)
+        elif option == "13":
+            break
         else:
             print("invalid option")
 
