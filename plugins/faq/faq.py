@@ -32,8 +32,10 @@ from langchain.chat_models import ChatOpenAI
 
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
+    PROMPT_DIR = ".\\plugins\\faq\\prompt\\"
 else:
     CHROMA_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectordb/chroma_db")
+    PROMPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt")
 CHROMA_COLLECTION_NAME = "sponger_bot"
 SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 SELECT_SCHOOL_PROMPT_FILE = "select_school_prompt.xlsx"
@@ -85,6 +87,7 @@ class FAQ(Plugin):
             # init openai
             openai.api_key = config.conf().get("open_ai_api_key")
             os.environ["OPENAI_API_KEY"] = config.conf().get("open_ai_api_key")
+            self.model = config.conf().get("model")
             # load config
             curdir = os.path.dirname(__file__)
             config_path = os.path.join(curdir, "faq_config.json")
@@ -105,7 +108,7 @@ class FAQ(Plugin):
             self.previous_not_hit_questions = {}
             self.prompt_list = []
             self.load_similar_keywords(os.path.join(curdir, SIMILAR_KEYWORDS_FILE))
-            self.load_select_school_prompt(os.path.join(curdir, SELECT_SCHOOL_PROMPT_FILE))
+            self.load_select_school_prompt(os.path.join(os.path.join(curdir, PROMPT_DIR), SELECT_SCHOOL_PROMPT_FILE))
 
             # register event handler
             self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
@@ -367,7 +370,7 @@ class FAQ(Plugin):
         #调用openai chatcomplition api 计算query和question的相似度
         try:
             res = openai.ChatCompletion.create(
-                model="gpt-4",
+                model=self.model,
                 messages=messages,
                 temperature=0.0,
                 max_tokens=2000
@@ -454,7 +457,7 @@ class FAQ(Plugin):
             ]
         )
         final_prompt.format(query=question)
-        chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+        chain = final_prompt | ChatOpenAI(model_name=self.model, temperature=0.0)
         output = chain.invoke({"query": question})
         content_str = output.content.replace("'", '"')
         try:
@@ -532,7 +535,7 @@ class FAQ(Plugin):
             ]
         )
         final_prompt.format(question=user_info)
-        chain = final_prompt | ChatOpenAI(model_name="gpt-4", temperature=0.0)
+        chain = final_prompt | ChatOpenAI(model_name=self.model, temperature=0.0)
         output = chain.invoke({"question": user_info})
         return Reply(content=output.content, type=ReplyType.TEXT)
     
