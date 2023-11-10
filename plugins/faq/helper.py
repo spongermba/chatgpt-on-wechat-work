@@ -2,6 +2,7 @@ import re
 import json
 import time
 import openai
+import chardet
 
 OPEN_AI_MODEL3 = "gpt-3.5-turbo"
 OPEN_AI_MODEL4 = "gpt-4"
@@ -64,6 +65,12 @@ def touch_up_the_text(input:str, retry_count)->str:
 def remove_no_chinese(text: str) -> str:
     pattern = re.compile(r'[^\u4e00-\u9fa5]')
     return re.sub(pattern, '', text)    
+
+def detect_file_encoding(file_path):
+    with open(file_path, 'rb') as f:
+        result = chardet.detect(f.read())
+    return result['encoding']
+
 # def ocr(url:str)->str:
 #     pass
 

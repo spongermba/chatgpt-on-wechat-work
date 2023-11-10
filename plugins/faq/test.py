@@ -13,11 +13,13 @@ from langchain.vectorstores import Chroma
 
 from helper import json_gpt, touch_up_the_text, remove_no_chinese
 
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 if sys.platform == 'win32':
     CHROMA_DB_DIR = ".\\plugins\\faq\\vectordb\\chroma_db\\"
+    PROMPT_DIR = "prompt\\"
 else:
     CHROMA_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectordb/chroma_db")
+    PROMPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt")
 CHROMA_COLLECTION_NAME = "sponger_bot"
 SIMILAR_KEYWORDS_FILE = "similar_keywords.csv"
 
@@ -452,7 +454,7 @@ def load_select_school_prompt(file_path: str) -> list:
 
 def get_university_match_result(university: str, user_info: str) -> str:
     university = remove_no_chinese(university)
-    prompt_list = load_select_school_prompt(os.path.join(curdir, "select_school_prompt.xlsx"))
+    prompt_list = load_select_school_prompt(os.path.join(os.path.join(curdir, PROMPT_DIR), "select_school_prompt.xlsx"))
     for i in range(0, len(prompt_list)):
         if university == prompt_list[i]["university"]:
             prompt = prompt_list[i]["prompt"]

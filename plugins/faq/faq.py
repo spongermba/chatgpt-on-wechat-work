@@ -17,17 +17,15 @@ from bridge.bridge import Bridge
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
-import config
 from plugins import *
 from plugins.faq.helper import json_gpt, touch_up_the_text, remove_no_chinese
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
-from langchain.docstore.document import Document
 from langchain.prompts import PromptTemplate, FewShotChatMessagePromptTemplate, ChatPromptTemplate
 from langchain.prompts.few_shot import FewShotPromptTemplate
-from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 
+import config
 #from banwords.lib.WordsSearch import WordsSearch
 
 if sys.platform == 'win32':
@@ -241,6 +239,7 @@ class FAQ(Plugin):
         
         
         ori_result = db.similarity_search_with_relevance_scores(question, k=topk)
+        
         #logger.debug("[FAQ] question sim result: {}".format(ori_result))
         answers = []
         for i in range(0, len(ori_result)):
